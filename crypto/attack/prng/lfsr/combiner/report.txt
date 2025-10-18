@@ -1,0 +1,214 @@
+LFSR combiné - Attaque par Corrélation
+
+1. Le générateur de Geffe
+
+$ python3 geffe_attack.py 
+Observed keystream length: 100 bits
+
+[1] Attacking LFSR1...
+    Best candidate: 2156
+    Correlation: 78/100 = 0.78
+    Time: 0.797s
+
+[2] Attacking LFSR3...
+    Best candidate: 1
+    Correlation: 71/100 = 0.71
+    Time: 0.041s
+
+[3] Attacking LFSR2...
+    SOLUTION FOUND!
+    LFSR1 initial state: 2156 -> [0, 1, 0, 0, 0, 0, 1, 1, 0, 1, 1, 0, 0]
+    LFSR2 initial state: 494 -> [0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 0]
+    LFSR3 initial state: 1 -> [0, 0, 0, 0, 0, 0, 0, 0, 1]
+    Time: 0.040s
+
+Total time: 0.8782558441162109s
+
+Complexity Analysis
+Brute force:        2^33 = 8,589,934,592
+Correlation attack: 2^13 + 2^11 + 2^9 = 10,752
+Speedup factor:     798,915
+
+2. Attaque par corrélation
+
+Le défi consiste à analyser un chiffrement par flot basé sur un LFSR combiné utilisant quatre registres internes :
+
+  - LFSR1 : longueur 5, polynôme P1(X) = X^5 + X^2 + 1 
+  - LFSR2 : longueur 9, polynôme P2(X) = X^9 + X^4 + 1  
+  - LFSR3 : longueur 7, polynôme P3(X) = X^7 + X + 1
+  - LFSR4 : longueur 11, polynôme P4(X) = X^11 + X^2 + 1
+
+Ces registres sont combinés par la fonction booléenne :
+```
+f(x1,x2,x3,x4) = x1x2 + x1 + x2x4 + x3
+               = x1 + x3 + x2(x1 + x4)
+```
+
+Cette fonction est de degré algébrique 2 (quadratique donc non-linéaire) et équilibrée (8 zéros, 8 uns sur 2^4 entrées).
+
+Comme ils nous l'expliquent, elle n'a pas été choisie au hasard, et ils ont même démontré qu'elle n'était corrélée 
+à aucune des 4 variables afin d'échapper à l'attaque de Geffe. Il faudra être plus malin.
+
+L'analyse exhaustive révèle plusieurs approximations linéaires exploitables :
+  - Pr[f(x) = x1 + x3] = 12/16 = 0.75 (biais: +0.25)
+  - Pr[f(x) = x3 + x4] = 12/16 = 0.75 (biais: +0.25)
+  - Pr[f(x) = x1 + x2 + x3] = 12/16 = 0.75 (biais: +0.25)
+  - Pr[f(x) = x2 + x3 + x4] = 4/16 = 0.25 (biais: -0.25)
+
+Ici nous avons quatre corrélations distinctes avec des biais de ±0.25. Leurs "améliorations" négligent les attaques par corrélations.
+
+Les coefficients Walsh confirment les corrélations :
+  - Walsh(x1 + x3) = 8 -> corrélation = 0.500
+  - Walsh(x3 + x4) = 8 -> corrélation = 0.500
+  - Walsh(x1 + x2 + x3) = 8 -> corrélation = 0.500
+  - Walsh(x2 + x3 + x4) = -8 -> corrélation = -0.500
+
+La beauté de cette attaque réside dans sa stratégie séquentielle. Au lieu de faire une recherche exhaustive sur 
+2^32 = 4,294,967,296 possibilités, nous exploitons ces corrélations pour réduire l'espace de recherche à 
+k*(2^{5+7} + 2^11 + 2^9) = k*6656 où k est le nombre de candidats. Soit pour k=1, une réduction de 
+2^32/6656 = 645,278 fois la complexité originale.
+
+Phase 1. Exploitation de Pr[f(x) = x1 + x3] = 0.75:
+  
+  Force brute sur LFSR1 et LFSR3 (2^5 * 2^7 = 32*128 = 4096 possibilités). Pour chaque paire (k1,k3), nous testons 
+  si la corrélation x1 + x3 ≈ f est satisfaite sur 800 bits.
+
+Résultat: 1 paire candidate identifiée avec un score de 0.737.
+
+Phase 2. Exploitation de Pr[f(x) = x3 + x4] = 0.75
+  
+  Pour chaque k3 candidat de la phase 1, force brute sur LFSR4 (2^11 = 2048 possibilités). 
+  Test de corrélation x3 + x4 ≈ f.
+
+Résultat: 2 candidat k4 trouvé avec un score de 0.7 et 0.81.
+```
+pour k1=[1, 0, 0, 1, 1], k3=[1, 1, 1, 1, 0, 1, 1], score=0.71
+    Candidat k4: score x3 + x4 = 0.7
+    Candidat k4: score x3 + x4 = 0.81
+```
+
+Phase 3. Recherche sur LFSR2
+    
+  Pour chaque k1, k3, k4 candidat, force brute sur LFSR2 (2^9 = 512 possibilités). Validation de la fonction f sur seuil > 90%.
+
+Résultat: 1 candidat trouvé avec un score de 1.0.
+```
+pour k1=[1, 0, 0, 1, 1], k3=[1, 1, 1, 1, 0, 1, 1], k4=[1, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1]
+pour k1=[1, 0, 0, 1, 1], k3=[1, 1, 1, 1, 0, 1, 1], k4=[0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1]
+    CANDIDAT: k2 score = 1.0 !
+```
+
+Clés Récupérées:
+```
+k1 = [1, 0, 0, 1, 1]                    (LFSR1 - 5 bits)
+k2 = [1, 0, 1, 1, 0, 0, 0, 1, 0]        (LFSR2 - 9 bits)
+k3 = [1, 1, 1, 1, 0, 1, 1]              (LFSR3 - 7 bits)
+k4 = [0, 1, 0, 0, 0, 0, 1, 1, 0, 0, 1]  (LFSR4 - 11 bits)
+```
+
+La sécurité de ce chiffrement repose encore entièrement sur la robustesse de son générateur pseudo-aléatoire. Les LFSR combinés 
+n'étant pas toujours sécurisés contre les attaques par corrélation d'ordre supérieur...
+
+Avec plusieurs corrélations de biais ±0.25, nous obtenons une attaque séquentielle efficace.
+
+Dans les chiffrements par flux sécurisés, les fonctions de combinaison doivent respecter plusieurs critères cryptographiques:
+  1. Résistance aux corrélations: Certains coefficients de Walsh doivent être nuls.
+  2. Haut degré algébrique: Soumis à l'inégalité de Siegenthaler : m + d <= n-1 (fonction équilibrée), où m est l'ordre d'immunité 
+      de corrélation, d le degré algébrique, et n le nombre de variables. (trade-off degré vs corrélation).
+  3. Immunité algébrique : Résistance aux attaques algébriques.
+  4. Non-linéarité maximale: Distance de Hamming maximale aux fonctions affines (liée au max des coeff de Walsh).
+  5. Équilibrage: Fonction équilibrée.
+
+Je leur conseillerais de se pencher sur des constructions éprouvées comme celles utilisées dans Grain, SNOW ou E0, et 
+de ne pas oublier l'importance des fonctions booléennes résilientes.
+
+Il est donc important de se tenir à jour sur les attaques par corrélation si l'on souhaite faire de la cryptographie avec notre PRNG.
+
+Règle d'or: Ne jamais faire votre propre cryptographie !
+
+Résumé:
+  1. Attaque à clair connu: Récupération d'une partie de la keystream.
+  2. Analyse des corrélations: Identification de 4 corrélations exploitables avec biais ±0.25.
+  3. Attaque séquentielle: Réduction progressive de l'espace de recherche.
+
+Ce challenge démontre l'importance de la cryptanalyse, les chiffrements par flux ont besoin d'une complexité supplémentaire 
+au-delà des simples combinaisons linéaires.
+
+$ time python3 correlation_analysis.py 
+Correlation Analysis of Combining Function
+
+f(x1,x2,x3,x4) = x1*x2 + x1 + x2*x4 + x3
+               = x1 + x3 + x2(x1 + x4)
+
+Distribution: 8 zeros, 8 ones
+Function is balanced
+
+--------------------------------------------------
+Correlations found:
+  P[f = x1 + x3] = 12/16 = 0.75 (bias: +0.25)
+  P[f = x3 + x4] = 12/16 = 0.75 (bias: +0.25)
+  P[f = x1 + x2 + x3] = 12/16 = 0.75 (bias: +0.25)
+  P[f = x2 + x3 + x4] = 4/16 = 0.25 (bias: -0.25)
+
+--------------------------------------------------
+Correlation matrix P[A = B]:
+
+         x1    x2    x3    x4     f
+x1    1.000 0.500 0.500 0.500 0.500
+x2    0.500 1.000 0.500 0.500 0.500
+x3    0.500 0.500 1.000 0.500 0.500
+x4    0.500 0.500 0.500 1.000 0.500
+f     0.500 0.500 0.500 0.500 1.000
+
+--------------------------------------------------
+Walsh-Hadamard Transform:
+
+f vector: [1, 1, -1, -1, 1, -1, -1, 1, -1, -1, 1, 1, 1, -1, -1, 1]
+
+  Walsh(x1 + x3) = 8  ->  correlation = +0.50
+  Walsh(x3 + x4) = 8  ->  correlation = +0.50
+  Walsh(x1 + x2 + x3) = 8  ->  correlation = +0.50
+  Walsh(x2 + x3 + x4) = -8  ->  correlation = -0.50
+
+--------------------------------------------------
+
+real    0m0.081s
+user    0m0.069s
+sys     0m0.020s
+
+$ python3 correlation_attack.py 
+4-LFSR Combiner Correlation Attack
+
+True initial states (hidden from attacker):
+  k1 = 7 = [1, 1, 1, 0, 0]
+  k2 = 261 = [1, 0, 1, 0, 0, 0, 0, 0, 1]
+  k3 = 18 = [0, 1, 0, 0, 1, 0, 0]
+  k4 = 1836 = [0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1]
+
+Generating 100-bit keystream...
+Observed keystream: 10011000111110101011001010001111...
+
+Precomputing LFSR sequences...
+
+[Phase 1] Attacking via x1 + x3 correlation
+    Found 8 candidates (k1, k3)
+    Best score: 0.700
+    Time: 0.051s
+
+[Phase 2] Attacking via x3 + x4 correlation
+    Found 26 candidates (k1, k3, k4)
+    Best score: 0.730
+    Time: 0.199s
+
+[Phase 3] Brute forcing k2
+    Found 1 solution
+    Time: 0.460s
+
+Attack finished in 0.71 seconds.
+
+Solution 1:
+  k1 = 7 = [1, 1, 1, 0, 0]
+  k2 = 261 = [1, 0, 1, 0, 0, 0, 0, 0, 1]
+  k3 = 18 = [0, 1, 0, 0, 1, 0, 0]
+  k4 = 1836 = [0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1]
+Correct solution found!

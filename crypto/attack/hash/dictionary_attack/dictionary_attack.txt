@@ -1,0 +1,94 @@
+Dictionary attack
+
+Ce défi commence par un audit où vous trouvez que l'entreprise a rendu sa base de données de mots de passe accessible. 
+Les ingénieurs ne s'inquiètent pas, car ils utilisent hashdb.py. Ils stockent uniquement les hachages des mots de passe 
+et utilisent l'AES pour chiffrer les données sensibles.
+
+$ time python3 hmac_bf_simple.py output.json /path/to/rockyou.txt
+Target HMAC: 09464866226bb8432c2cd0bc1f972197fa4109a761ab23cc73a5824f3d83d441
+[+] 1,000,000 tries...
+[+] 2,000,000 tries...
+[+] 3,000,000 tries...
+[+] 4,000,000 tries...
+[+] 5,000,000 tries...
+[+] 6,000,000 tries...
+[+] 7,000,000 tries...
+[+] Password found after 7,427,273 tries: ilikecirket
+[+] Decrypted plaintext: FLAG{f4k3_f0r_t3st1ng}
+
+real    5m17.078s
+user    5m16.011s
+sys     0m1.248s
+
+En effet, cette entreprise possède un gros problème de sécurité. A l'aide d'un ordinateur très moyen et d'une 
+attaque par dictionnaire (ici rockyou.txt), il est possible, en quelque secondes/minutes, de retrouver le mot 
+de passe d'un utilisateur peu averti. On peut affiner notre recherche en rajoutant des règles à notre 
+dictionnaire (ex: OneRuleToRuleThemAll.rule), ce qui peut être utile si l'entreprise impose des restrictions 
+sur le mot de passe.
+
+Même si une base de donées n'est pas en libre accès, il est possbile que celle-ci fuite par compromission.
+
+Je conseillerai à cette entreprise de forcer/inciter ses utilisateurs à adopter des mots de passe robustes. Il 
+faut une longueur convenable (15 carcartères min), absents des dictionnaires courants, non réutilisés donc non fuité, 
+avec une forte entropie et ne contenant aucun lien direct avec des informations personnelles. Je leur demanderais 
+aussi d'ajouter un sel aléatoire dans le calcul du hachage pour éviter les attaques par tables précalculées, nottament 
+les tables arc-en-ciel qui peuvent, dans certain cas*, couvrir de manière non négligable l'espace des hachés. Il 
+serait alors possible de retrouver le mot de passe d'un utilisateur sans que celui-ci se trouve dans un dictionnaire.
+Même si une longueur de mot de passe supérieur à 15 carcartères rendrais ces attaques inefficace. On est jamais 
+assez prudent.. A savoir qu'il existe des tables déjà calculer disponible en ligne. 
+
+*Surtout si la fonction de hachage utilisée présente une faible résistance aux collisions (ex: MD4), ce type d’attaque n'est 
+pas à négliger. Un attaquant pourrait réussir à s’authentifier (par collision) sans même connaître le véritable mot de passe. 
+
+Il est important de noter que ces attaques sont effectuer hors-ligne. On peut les écrires en C/Rust (+ multithread) 
+pour un gain de performance notable. Je leur recommanderais une fonction de hachage à dérivation lente pour réduire 
+encore plus tout ses problèmes (ex: PBKDF2 / Argon2 / Bcrypt avec des paramètres robustes).
+
+Enfin, détecter et limiter les fuites (monitoring, rotation des secrets, MFA). Si une base de données fuit, 
+des mots réutilisés ailleurs deviennent dangereux. Il faut prévenir les utilisateurs !
+
+Remarque: Dans le cadre du challenge, le mot de passe est directement utilisé comme clé secrète. Comme on a vu, c'est extrêmement dangereux. 
+Un KDF transforme le mot de passe en une clé de longueur fixe, à partir de cette clé dérivée on doit tirer des clés distinctes pour 
+chiffrement et authentification (ex: via HKDF) ou utiliser un mode AEAD. Imaginons qu'une vulnérabilité soit découverte dans la fonction 
+de hachage permettant de récupérer la clé de chiffrement. Avec HMAC-based Key Derivation Function, l'authentification reste sécurisée 
+car elle utilise une clé différente.
+
+Ressource: NIST Special Publication 800‑63B - Digital Identity Guidelines (Authentication and Lifecycle Management).
+
+Calcul: HMAC-SHA256 -> 32 octets
+  Si l'on souhaite stocker tous les hachés de mots de passe de longueur 6 tirés d'un alphabet de 95 caractères 
+  (printable ASCII), la taille nécessaire serait : 32 * 95^6 = 23 522 940 500 000 octets = 23.5 To.
+
+Implémentation multithread Python:
+$ time python3 hmac_bf.py output.json /path/to/rockyou.txt
+Target HMAC: 09464866226bb8432c2cd0bc1f972197fa4109a761ab23cc73a5824f3d83d441
+Using 8 worker processes
+[+] 1,000,000 tried...
+[+] 2,000,000 tried...
+[+] 3,000,000 tried...
+[+] 4,000,000 tried...
+[+] 5,000,000 tried...
+[+] 6,000,000 tried...
+[+] 7,000,000 tried...
+[+] Password found after 7,429,272 tries: 'ilikecirket'
+[+] Decrypted plaintext: FLAG{f4k3_f0r_t3st1ng}
+
+
+real    0m6.939s
+user    0m49.893s
+sys     0m1.592s
+
+Implémentation multithread C:
+$ time ./hmac_bf output.json /path/to/rockyou.txt -v
+Target HMAC: 09464866226bb8432c2cd0bc1f972197fa4109a761ab23cc73a5824f3d83d441
+Using 8 threads
+[+] 1,000,000 tried...
+[+] Password found after 1,224,684 tries: 'ilikecirket'
+[+] Decrypted plaintext: FLAG{f4k3_f0r_t3st1ng}
+
+
+real    0m0.900s
+user    0m6.800s
+sys     0m0.124s
+
+Note: Je ne suis pas un pro du multithread et des optimisations, je pense qu'il est possible d'améliorer grandement les performances.

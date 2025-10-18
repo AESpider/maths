@@ -1,0 +1,114 @@
+LFSR Stream Cipher: PNG Known Plaintext Attack
+
+Lors d'un test de sécurité, vous trouvez qu'une équipe de développeurs utilise un système 
+de chiffrement "maison" pour protéger leurs fichiers.
+
+Ce chiffrement utilise un LFSR (registre à décalage à rétroaction linéaire) de 64 bits, 
+dont la clé (l'état interne initial) change tous les jours. 
+
+L'équipe affirme que leur solution est incassable. Pour vous lancer un défi, ils vous donnent une image PNG chiffrée.
+
+$ time python3 kpa_lfsr.py image.png.enc
+Berlekamp-Massey: L_found = 64
+Discovered taps (1-indexed): [60, 61, 63, 64]
+Initial state (64 bits): 0101100100000000110101010111010001110110110111101000011011100000
+Match on first 128 bits: True
+Decrypted file written to: image.png
+
+real    0m1.705s
+user    0m1.681s
+sys     0m0.011s
+
+Leur propre système de chiffrement maison pour "protéger" des fichiers sensibles ne mérite pas ce nom.
+Je le qualifirai plutôt d'outil d'obfuscation. Sans blague, on a un gros problème, beaucoup de 
+chiffrement par flot de l'époque ne sont pas protéger contre les attaques à clair connu (KPA-insecure). 
+C'est le cas de celui-ci basé sur un LFSR !
+
+Ce chiffrement étant un xor bit à bit du fichier et d'une keystream, sa sécurité repose entièrement sur la 
+robustesse de son générateur pseudo-aléatoire. Le LFSR n'étant pas sécurisé..
+
+    ciphertext_bit = plaintext_bit ^ keystream_bit
+
+Les fichiers sont très souvent composés d’un en-tête/structure connue (signature, balise, ...). Ici on utilise cette 
+propriété pour effectuer une attaque à clair connu. En XORant l’en-tête chiffré avec l’en-tête connu, nous récupérons 
+les 16 premiers octets (128 bits) du flux de clés.
+
+    bit_image.png ^ bit_image.png.enc = bit_image.png ^ bit_image.png ^ bit_keystream = bit_keystream
+
+On obtient maintenant une séquence générée par le générateur. Si une attaque existe contre ce générateur et 
+que la longueur de notre séquence est suffisante pour l'exploiter, on peut retrouver l'état interne du générateur 
+et ainsi prédire ses futurs sorties. Dans le cas idéal, c'est l'état initial, de cette manière on connaîtrait 
+tous les bits qui ont été XOR avec notre image d'origine et on pourrait donc déchiffrer entièrement. Autrement dit, 
+dès que l'on connait suffisamment de bits de sortie d'un générateur vulnérable, on peut prédire les sortie de 
+celui-ci. Il vaut mieux que ce nombre soit irrécoltable par un attaquant limité en ressource.
+
+Un LFSR produit un flux de bits utilisés comme clé (keystream) suivant la récurrence linéaire : 
+    s_{t+L} ​= sum_{j=1..L} ​c_j​ * s_{t+L-j} ​(Mod 2)  
+    s_t = c1*s_{t-1} + c2*s_{t-2} + ... + cL*s_{t-L} (mod 2)
+
+L étant la complexité linéaire du polynôme de rétroaction C, si il est primif sa période est maximal (2^L - 1).
+
+Avec 2L bits consécutifs de la keystream connus, dans notre cas 128=2*64, nous obtenons un système d’équations 
+linéaires dans GF(2) pour résoudre les L coefficients de rétroaction (taps) c1, ..., cL et l’état interne de 64 bits.
+
+Sinon, toujours avec 2L bits consécutifs, l'algorithme Berlekamp-Massey récupère à la fois la complexité linéaire L, 
+les taps et l’état interne en temps polynomial. Une fois qu'ils sont connus, l’ensemble du flux du LFSR est reproductible. 
+
+Note: Dans notre cas l'état interne = initial puisque on récupère les premiers bits de la keystream. Mais, dans ce schéma 
+on peut dérouler toute sa période afin de retrouver les états passés dont l'état initial. 
+
+Dans les chiffrements par flux sécurisés, les LFSR seuls ne sont pas utilisés de manière autonome : ils 
+doivent être combinés via des fonctions non linéaires ou des filtres. Je leur conseillerai de se pencher sur 
+les constructions derrière SNOW et Grain (qui combinent plusieurs LFSR avec des fonctions booléennes), ChaCha20 
+(approche différente avec des opérations non linéaires sur des mots 32-bits) ou encore E0 et de ne pas oublier 
+de réinitialiser proprement son générateur une fois que trop de bits de sortie sont exposés. 
+
+Il est donc important de se tenir à jour sur les attaques contre notre PRNG si l'on souhaite faire de la cryptographie. 
+
+Pour résumer:
+  1. Le texte en clair connu (en-tête PNG) -> récupération des 2L premiers bits consécutifs de la keystream.
+  2. Berlekamp-Massey sur la keystream -> récupération de L, des taps et de l'état initial.
+  3. Déchiffrement et validation.
+
+Un cas d’école de la raison pour laquelle les chiffrements par flux ont besoin d’une complexité non linéaire 
+au-delà des simples XOR.
+
+Règle d'or : Ne jamais faire votre propre cryptographie !
+
+Bonus:
+Avec numpy: 
+$ time python3 lfsr_on_file.py test
+Performance test: generating 0.100 GiB of keystream (107374182 bytes)
+Polynomial taps: [60, 61, 63, 64]
+Initial state (hex): 0x0aa072cd8c8ad13f
+100%|███████████████████████████████████████████████████████████████████████| 103/103 [05:47<00:00,  3.37s/it]
+Total time: 347.3562 s
+Throughput: 0.29 MiB/s (0.0003 GiB/s)
+
+real    5m47.927s
+user    5m49.909s
+sys     0m0.363s
+
+Sans numpy:
+$ time python3 lfsr_on_file.py test
+Performance test: generating 0.100 GiB of keystream (107374182 bytes)
+Polynomial taps: [60, 61, 63, 64]
+Initial state (hex): 0xd77285513120116b
+100%|███████████████████████████████████████████████████████████████████████| 103/103 [06:00<00:00,  3.50s/it]
+Total time: 360.8921 s
+Throughput: 0.28 MiB/s (0.0003 GiB/s)
+
+real    6m1.198s
+user    6m3.609s
+sys     0m0.087s
+
+Remarque: Les chiffrements par flot sont populaires pour leur faible temps de calcul. Néanmoins, on voit avec 
+l'option test que même une implémentation "optimisée" en Python demande un peu de temps pour un gros fichier. 
+Pour la plupart des utilisations ce n'est pas un problème, souvent dans un contexte de l'instatané, il est 
+rare de recevoir/envoyer d'énormes quantités de données. Mais dans un autre usage c'est différent, les 
+ransomeware ! Ils doivent chiffrer rapidement, avant que l'utilisateur s'en aperçoive, énormément de fichiers. 
+Il est donc très judicieux de faire une implémentation multithread en C, très proche du binaire, des registres 
+et instructions processeur afin d'utiliser (si possible) directement les implémentations hardware. Attention pas 
+toute les machines ciblées sont des bètes de calcul, donc sur certain cas il est compliqué d'avoir de bonne 
+performance. Il faut être plus malin que simplement tout chiffrer directement depuis la racine. Liste de 
+priorité, chiffrement partiel, altération en attente du chiffrement... On ne va pas non plus donné trop d'idées :)

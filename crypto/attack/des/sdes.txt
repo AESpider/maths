@@ -1,0 +1,38 @@
+SDES (Simplified DES) est une petite version du DES : blocs de 8 bits, clé de 10 bits.
+
+On implémente l'attaque Meet-in-the-Middle :
+    1. Construire table_gauche : pour chaque k1 -> tuple( E_k1(P_i) )
+    2. Construire table_droite : pour chaque k3 -> tuple( D_k3(C_i) )
+    3. Pour chaque k2 : pré-calculer D_k2[x] pour x de 0 à 255, puis 
+        transformer chaque tuple de gauche et chercher dans table_droite.
+
+$ time python3 mitm_3sdes.py 
+Valid triples (K1, K2, K3):
+ K1=574 (bin 1000111110), K2=797 (bin 1100011101), K3=082 (bin 0001010010)
+ K1=542 (bin 1000011110), K2=829 (bin 1100111101), K3=082 (bin 0001010010)
+ 
+real    0m17.917s
+user    0m17.715s
+sys     0m0.022s
+
+On trouve deux clés candidates vérifiant toutes les paires (Pi, Ci) fournies. Pour déterminer quelle clé est vraiment été 
+utilisée, il nous faudrait des nouvelles paires jusqu'à ce que le comportement diffère (ex: oracle de chiffrement).
+
+Remarque: 
+ K1 xor K1' = 0000100000 (decimal 32)
+ K2 xor K2' = 0000100000 (decimal 32)
+ K3 xor K3' = 0000000000 (decimal 0)
+
+On a K3 = K3'.
+
+```python
+def intermediate_map(k1,k2):
+    return [ bits_to_int(sdes_decrypt(sdes_encrypt(int_to_bits(b,8), k1), k2)) for b in range(256) ]
+
+print(f"Test: D_k2 o E_k1 == D_k2' o E_k1' on the 8-bit domain -> {intermediate_map(K1, K2) == intermediate_map(K1', K2')} on all 256 inputs.")
+```
+
+Test: D_k2 o E_k1 == D_k2' o E_k1' on the 8-bit domain -> True on all 256 inputs.
+
+On observe une collision de clé (comportement identique sur tout l'espace 8 bits), ce qui est normal sur un 
+schéma comme SDES (espace de clé très limité). Les deux clés sont indistinguables sur l’espace d’entrée :)
